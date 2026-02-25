@@ -1,7 +1,7 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
 # cloud run dependencies
-/cloudrun/prices-backfill/node_modules
+/cloudrun/prices_worker/node_modules
 
 # dependencies
 /node_modules
