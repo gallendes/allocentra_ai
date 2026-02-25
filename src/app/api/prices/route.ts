@@ -62,7 +62,7 @@ async function fetchPricesFromTwelveData(symbols: string[]) {
     const apikey = process.env.TWELVE_DATA_API_KEY;
     if (!apikey) throw new Error("Missing TWELVE_DATA_API_KEY");
 
-    const url = new URL("https://api.twelvedata.com/price");
+    const url = new URL(TWELVE_BASE + "/price");
     url.searchParams.set("symbol", symbols.join(",")); // comma-separated batch
     url.searchParams.set("apikey", apikey);
 
@@ -98,11 +98,11 @@ async function upsertLatestPrices(prices: Map<string, number>) {
     // Insert/update row by row (5 symbols, so this is fine and simple)
     for (const [symbol, latest_price] of entries) {
         await sql`
-      INSERT INTO latest_prices (symbol, latest_price, updated_at)
-      VALUES (${symbol}, ${latest_price}, NOW())
-      ON CONFLICT (symbol) DO UPDATE
-      SET latest_price = EXCLUDED.latest_price,
-          updated_at   = NOW()
+          INSERT INTO latest_prices (symbol, latest_price, updated_at)
+          VALUES (${symbol}, ${latest_price}, NOW())
+          ON CONFLICT (symbol) DO UPDATE
+          SET latest_price = EXCLUDED.latest_price,
+              updated_at   = NOW()
     `;
     }
 }
