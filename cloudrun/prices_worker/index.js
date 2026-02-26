@@ -6,6 +6,14 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false },
 });
 
+// Optional but strongly recommended while debugging
+process.on("unhandledRejection", (err) => {
+    console.error("UNHANDLED REJECTION:", err);
+});
+process.on("uncaughtException", (err) => {
+    console.error("UNCAUGHT EXCEPTION:", err);
+});
+
 async function fetchClose(symbol) {
     const apiKey = process.env.TWELVEDATA_API_KEY;
     if (!apiKey) throw new Error("Missing TWELVEDATA_API_KEY");
@@ -37,15 +45,14 @@ async function fetchClose(symbol) {
 
 async function getSymbols(client) {
     const { rows } = await client.query(`
-        SELECT symbol
-        FROM positions
-        GROUP BY symbol
-        ORDER BY SUM(amount) DESC
-    `);
+    SELECT symbol
+    FROM symbols
+  `);
     return rows.map((r) => r.symbol);
 }
 
-async function runBackfill(res) {
+// ✅ CHANGED: no res passed in; returns results; throws on failure
+async function runBackfill() {
     const client = await pool.connect();
     try {
         const symbols = await getSymbols(client);
@@ -57,10 +64,10 @@ async function runBackfill(res) {
 
             await client.query(
                 `
-                    INSERT INTO time_series(symbol, datetime, close)
-                    VALUES ($1, $2, $3)
-                        ON CONFLICT (symbol, datetime)
-        DO UPDATE SET close = EXCLUDED.close
+                  INSERT INTO time_series(symbol, datetime, close)
+                  VALUES ($1, $2, $3)
+                  ON CONFLICT (symbol, datetime)
+                  DO UPDATE SET close = EXCLUDED.close
                 `,
                 [symbol, datetimeUtc.toISOString(), close]
             );
@@ -68,27 +75,25 @@ async function runBackfill(res) {
             results.push({ symbol, date, close });
         }
 
-        res.json({ ok: true, inserted: results.length, data: results });
+        return results;
     } finally {
         client.release();
     }
 }
 
-async function runGetPrices(res) {
+// ✅ CHANGED: no res passed in; returns json; throws on failure
+async function runGetPrices() {
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
     if (!baseUrl) throw new Error("Missing NEXT_PUBLIC_BASE_URL");
 
-    const r = await fetch(`${baseUrl}/api/prices`, {
-        cache: "no-store",
-    });
-
+    const r = await fetch(`${baseUrl}/api/prices`, { cache: "no-store" });
     const json = await r.json();
 
     if (!r.ok) {
         throw new Error(`Prices route failed: ${json?.error || r.statusText}`);
     }
 
-    res.json({ ok: true, data: json });
+    return json;
 }
 
 /*
@@ -97,19 +102,26 @@ async function runGetPrices(res) {
 */
 exports.main = async (req, res) => {
     try {
+        console.log("PATH:", req.path, "METHOD:", req.method);
+
         if (req.path === "/backfill") {
-            return await runBackfill(res);
+            const results = await runBackfill();
+            return res.json({ ok: true, inserted: results.length, data: results });
         }
 
         if (req.path === "/get-prices") {
-            return await runGetPrices(res);
+            const data = await runGetPrices();
+            return res.json({ ok: true, data });
         }
 
-        res.status(404).json({ error: "Not found" });
+        return res.status(404).json({ ok: false, error: "Not found" });
     } catch (err) {
-        res.status(500).json({
+        // ✅ THIS is the missing difference: log the real stack trace
+        console.error("HANDLER ERROR:", err);
+
+        return res.status(500).json({
             ok: false,
-            error: err.message,
+            error: err?.message || String(err),
         });
     }
 };
