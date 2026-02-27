@@ -7,21 +7,33 @@ export const runtime = "nodejs";
 const sql = neon(process.env.DATABASE_URL!);
 
 export async function GET(req: Request) {
-    const { searchParams } = new URL(req.url);
-    const username = searchParams.get("username") ?? "sea_otter";
-    const symbol = searchParams.get("symbol");
+    try {
+        const { searchParams } = new URL(req.url);
+        const username = searchParams.get("username") ?? "sea_otter";
+        const symbol = searchParams.get("symbol");
 
-    if (!symbol) {
-        return NextResponse.json({ error: "Symbol parameter is required" }, { status: 400 });
+        if (!symbol) {
+            return NextResponse.json(
+                { error: "Symbol parameter is required" },
+                { status: 400 }
+            );
+        }
+
+        const rows = await sql`
+            SELECT id, username, symbol, type, executed_at, shares, price
+            FROM trades
+            WHERE username = ${username}
+              AND symbol = ${symbol}
+            ORDER BY executed_at DESC, id DESC
+        `;
+
+        return NextResponse.json(rows);
+
+    } catch (err) {
+        console.error("GET /api/trades failed:", err);
+        return NextResponse.json(
+            { error: "Internal server error" },
+            { status: 500 }
+        );
     }
-
-    const rows = await sql`
-        SELECT id, username, symbol, type, executed_at, shares, price
-        FROM trades
-        WHERE username = ${username}
-        AND symbol = ${symbol}
-        ORDER BY executed_at DESC, id DESC
-      `;
-
-    return NextResponse.json(rows);
 }
