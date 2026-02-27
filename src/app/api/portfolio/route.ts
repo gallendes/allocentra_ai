@@ -30,22 +30,18 @@ export async function GET(req: Request) {
               WHERE t.username = ${username}
               GROUP BY t.symbol
             ),
-            last_two AS (
-              SELECT
-                ts.symbol,
-                ts.datetime::date AS dt,
-                ts.close,
-                ROW_NUMBER() OVER (PARTITION BY ts.symbol ORDER BY ts.datetime::date DESC) AS rn
-              FROM time_series ts
-              WHERE ts.symbol IN (SELECT symbol FROM trade_agg)
-            ),
             prev_close AS (
               SELECT
                 symbol,
-                MAX(CASE WHEN rn = 1 THEN dt END) AS dt1,
-                MAX(CASE WHEN rn = 1 THEN close END) AS close1,
-                MAX(CASE WHEN rn = 2 THEN close END) AS close2
-              FROM last_two
+                MAX(CASE WHEN rn = 2 THEN close END) AS yesterday_close
+              FROM (
+                  SELECT
+                      ts.symbol,
+                      ts.close,
+                      ROW_NUMBER() OVER (PARTITION BY ts.symbol ORDER BY ts.datetime DESC) AS rn
+                  FROM time_series ts
+                  WHERE ts.symbol IN (SELECT symbol FROM trade_agg)
+                ) ranked
               WHERE rn <= 2
               GROUP BY symbol
             ),
@@ -73,15 +69,12 @@ export async function GET(req: Request) {
               s.industry_sector,
               s.company_size,
               v.volatility,
-              CASE
-                WHEN prev.dt1 = (NOW() AT TIME ZONE 'utc')::date THEN prev.close2
-                ELSE prev.close1
-              END AS yesterday_close
+              prev.yesterday_close
             FROM trade_agg a
             JOIN latest_prices lp ON lp.symbol = a.symbol
             JOIN symbols s ON s.symbol = a.symbol
             LEFT JOIN prev_close prev ON prev.symbol = a.symbol
-            LEFT JOIN vol_calc v ON v.symbol = a.symbol
+            LEFT JOIN volatility v ON v.symbol = a.symbol
             WHERE a.shares <> 0
             ORDER BY a.symbol ASC
           `;
