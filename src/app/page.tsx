@@ -384,7 +384,7 @@ export default function Page() {
 
     refresh(); // initial load
 
-    const intervalId = window.setInterval(refresh, 4 * 60 * 1000);
+    const intervalId = window.setInterval(refresh, 60 * 1000);
 
     const onFocus = () => refresh();
 
