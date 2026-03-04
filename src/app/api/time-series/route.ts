@@ -182,10 +182,10 @@ export async function GET(req: Request) {
         const newest = history[0].portfolio_value;
         const oldest = history[history.length - 1].portfolio_value;
 
-        const range_pnl = Number((newest - oldest).toFixed(2));
+        const range_pnl = Number((newest - oldest));
         const range_pnl_percent =
             oldest !== 0
-                ? Number(((range_pnl / oldest)).toFixed(4))
+                ? Number(((range_pnl / oldest)))
                 : 0;
 
         return NextResponse.json({

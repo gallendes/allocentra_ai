@@ -100,11 +100,6 @@ function fmtNum(n: number, digits = 2) {
   });
 }
 
-function roundTo(n: number, digits: number) {
-  if (!Number.isFinite(n)) return 0;
-  return Number(n.toFixed(digits));
-}
-
 function formatDateOnly(value?: string) {
   if (!value) return "";
 
@@ -203,11 +198,7 @@ export default function Page() {
       });
       if (!res.ok) throw new Error(`api/portfolio failed: ${res.status}`);
       const data = (await res.json()) as PortfolioResponse;
-      setPortfolio({
-        ...data,
-        total_day_gain: roundTo(Number(data.total_day_gain), 2),
-        total_day_gain_percent: roundTo(Number(data.total_day_gain_percent), 4),
-      });
+      setPortfolio(data);
       setLastUpdated(new Date())
     } catch (e: any) {
       setError(e?.message ?? "Failed to load portfolio");
@@ -359,26 +350,6 @@ export default function Page() {
 
     const refresh = () => {
       fetchPortfolio();
-    };
-
-    refresh(); // initial load
-
-    const intervalId = window.setInterval(refresh, 60 * 1000);
-
-    const onFocus = () => refresh();
-
-    window.addEventListener("focus", onFocus);
-
-    return () => {
-      window.clearInterval(intervalId);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [username]);
-
-  useEffect(() => {
-    if (!username) return;
-
-    const refresh = () => {
       fetchTimeSeries(timeframe);
     };
 
