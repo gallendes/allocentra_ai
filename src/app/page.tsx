@@ -14,9 +14,9 @@ import {
   Cell,
   Legend,
 } from "recharts";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Trash2 } from "lucide-react";
 
-type Timeframe = "1d" | "5d" | "1m" | "6m" | "1y";
+type Timeframe = "1d" | "5d" | "1m" | "6m" | "1y" | "5y";
 
 type PortfolioPosition = {
   symbol: string;
@@ -75,6 +75,8 @@ type TradeRow = {
   price: number;
 };
 
+const SHARE_STEP = 1;
+
 function fmtMoney(n: number, digits = 2) {
   const x = Number.isFinite(n) ? n : 0;
   return x.toLocaleString(undefined, {
@@ -98,6 +100,11 @@ function fmtNum(n: number, digits = 2) {
   });
 }
 
+function roundTo(n: number, digits: number) {
+  if (!Number.isFinite(n)) return 0;
+  return Number(n.toFixed(digits));
+}
+
 function formatDateOnly(value?: string) {
   if (!value) return "";
 
@@ -109,6 +116,14 @@ function formatDateOnly(value?: string) {
     month: "short",
     day: "2-digit",
   });
+}
+
+function localDateISO(d = new Date()) {
+  // YYYY-MM-DD in the user's *local* timezone (avoids toISOString() UTC shift)
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 function labelizeKey(k: string) {
@@ -141,6 +156,9 @@ function safeRecordEntries(obj?: Record<string, number>) {
 export default function Page() {
   const [username] = useState("sea_otter");
 
+  const [refreshing, setRefreshing] = useState(false)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
   const [timeframe, setTimeframe] = useState<Timeframe>("1m");
 
   const [portfolio, setPortfolio] = useState<PortfolioResponse | null>(null);
@@ -154,6 +172,19 @@ export default function Page() {
   const [tradesBySymbol, setTradesBySymbol] = useState<Record<string, TradeRow[]>>({});
   const [loadingTrades, setLoadingTrades] = useState<Record<string, boolean>>({});
 
+  const [tradeModal, setTradeModal] = useState<{
+    open: boolean;
+    symbol: string | null;
+    type: "BUY" | "SELL";
+  }>({ open: false, symbol: null, type: "BUY" });
+
+  const [tradeQty, setTradeQty] = useState<number>(1);
+  const [tradeDate, setTradeDate] = useState<string>(localDateISO());
+  const [tradePrice, setTradePrice] = useState<number>(0);
+  const [savingTrade, setSavingTrade] = useState(false);
+  const [tradeError, setTradeError] = useState<string | null>(null);
+  const [deletingTradeId, setDeletingTradeId] = useState<number | null>(null);
+
   const todayLabel = useMemo(() => {
     return new Date().toLocaleString(undefined, {
       year: "numeric",
@@ -166,16 +197,23 @@ export default function Page() {
     setLoadingPortfolio(true);
     setError(null);
     try {
+      setRefreshing(true)
       const res = await fetch(`/api/portfolio?username=${encodeURIComponent(username)}`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`api/portfolio failed: ${res.status}`);
       const data = (await res.json()) as PortfolioResponse;
-      setPortfolio(data);
+      setPortfolio({
+        ...data,
+        total_day_gain: roundTo(Number(data.total_day_gain), 2),
+        total_day_gain_percent: roundTo(Number(data.total_day_gain_percent), 4),
+      });
+      setLastUpdated(new Date())
     } catch (e: any) {
       setError(e?.message ?? "Failed to load portfolio");
       setPortfolio(null);
     } finally {
+      setTimeout(() => setRefreshing(false), 400)
       setLoadingPortfolio(false);
     }
   }
@@ -184,6 +222,7 @@ export default function Page() {
     setLoadingTs(true);
     setError(null);
     try {
+      setRefreshing(true)
       const res = await fetch(
           `/api/time-series?username=${encodeURIComponent(username)}&timeframe=${encodeURIComponent(tf)}`,
           { cache: "no-store" }
@@ -195,12 +234,13 @@ export default function Page() {
       setError(e?.message ?? "Failed to load time series");
       setTs(null);
     } finally {
+      setTimeout(() => setRefreshing(false), 400)
       setLoadingTs(false);
     }
   }
 
-  async function ensureTrades(symbol: string) {
-    if (tradesBySymbol[symbol]) return;
+
+  async function fetchTradesForSymbol(symbol: string) {
     setLoadingTrades((m) => ({ ...m, [symbol]: true }));
     try {
       const res = await fetch(
@@ -210,20 +250,162 @@ export default function Page() {
       if (!res.ok) throw new Error(`api/trades failed: ${res.status}`);
       const rows = (await res.json()) as TradeRow[];
       setTradesBySymbol((m) => ({ ...m, [symbol]: rows }));
+      return rows;
     } catch {
       setTradesBySymbol((m) => ({ ...m, [symbol]: [] }));
+      return [];
     } finally {
       setLoadingTrades((m) => ({ ...m, [symbol]: false }));
     }
   }
 
+  async function ensureTrades(symbol: string) {
+    if (tradesBySymbol[symbol]) return;
+    await fetchTradesForSymbol(symbol);
+  }
+
+  async function submitTrade() {
+    if (!tradeModal.symbol) return;
+
+    setSavingTrade(true);
+    setTradeError(null);
+
+    try {
+      const payload = {
+        username,
+        symbol: tradeModal.symbol,
+        type: tradeModal.type,
+        executed_at: tradeDate, // YYYY-MM-DD
+        shares: Number(tradeQty),
+        price: Number(tradePrice),
+      };
+
+      const res = await fetch("/api/trade", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        const msg = j?.error || `api/trade failed: ${res.status}`;
+        throw new Error(msg);
+      }
+
+      await Promise.all([
+        fetchPortfolio(),
+        fetchTimeSeries(timeframe),
+        fetchTradesForSymbol(tradeModal.symbol),
+      ]);
+
+      setTradeModal({ open: false, symbol: null, type: "BUY" });
+    } catch (e: any) {
+      setTradeError(e?.message ?? "Failed to save trade");
+    } finally {
+      setSavingTrade(false);
+    }
+  }
+
+  async function deleteTrade(symbol: string, idRaw: number) {
+    const id = Number(idRaw);
+
+    if (!Number.isFinite(id) || id <= 0) {
+      console.error("Invalid trade ID:", id);
+      return
+    };
+
+    setDeletingTradeId(id);
+    setError(null);
+
+    try {
+      const res = await fetch(
+          `/api/trade?id=${encodeURIComponent(String(id))}&username=${encodeURIComponent(username)}`,
+          { method: "DELETE" }
+      );
+
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        const msg = j?.error || `api/trade DELETE failed: ${res.status}`;
+        throw new Error(msg);
+      }
+
+      await Promise.all([
+        fetchPortfolio(),
+        fetchTimeSeries(timeframe),
+        fetchTradesForSymbol(symbol),
+      ]);
+    } catch (e: any) {
+      setError(e?.message ?? "Failed to delete trade");
+    } finally {
+      setDeletingTradeId(null);
+    }
+  }
+
+  function openTradeModal(symbol: string, type: "BUY" | "SELL", defaultPrice?: number) {
+    setTradeError(null);
+    setTradeModal({ open: true, symbol, type });
+    setTradeQty(1);
+    setTradeDate(localDateISO());
+    setTradePrice(Number.isFinite(defaultPrice as any) ? Number(defaultPrice) : 0);
+  }
+
+  function closeTradeModal() {
+    if (savingTrade) return;
+    setTradeModal({ open: false, symbol: null, type: "BUY" });
+  }
+
   useEffect(() => {
-    fetchPortfolio();
+    if (!username) return;
+
+    const refresh = () => {
+      fetchPortfolio();
+    };
+
+    refresh(); // initial load
+
+    const intervalId = window.setInterval(refresh, 60 * 1000);
+
+    const onFocus = () => refresh();
+
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", onFocus);
+    };
   }, [username]);
 
   useEffect(() => {
-    fetchTimeSeries(timeframe);
+    if (!username) return;
+
+    const refresh = () => {
+      fetchTimeSeries(timeframe);
+    };
+
+    refresh(); // initial load
+
+    const intervalId = window.setInterval(refresh, 4 * 60 * 1000);
+
+    const onFocus = () => refresh();
+
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", onFocus);
+    };
   }, [username, timeframe]);
+
+  useEffect(() => {
+    if (!tradeModal.open) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeTradeModal();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [tradeModal.open, savingTrade]);
 
   const chartData = useMemo(() => {
     const hist = ts?.history ?? [];
@@ -255,6 +437,11 @@ export default function Page() {
   return (
       <div className="min-h-screen bg-secondary">
         <div className="mx-auto max-w-6xl px-4 py-6">
+          {/* Header */}
+          <header className="mb-6">
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900">Allocentra AI</h1>
+            <p className="mt-1 text-sm text-slate-600">AI-Powered Portfolio Intelligence</p>
+          </header>
           {/* Top row */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
             {/* Left: Line graph card */}
@@ -262,13 +449,13 @@ export default function Page() {
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                    <div className="text-2xl font-semibold tracking-tight text-slate-900">
+                    <div className={`text-2xl font-semibold tracking-tight text-slate-900 ${refreshing ? "animate-pulse opacity-60" : ""}`}>
                       {fmtMoney(portfolio?.total_value ?? 0)}
                     </div>
                     <div
                         className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-sm ${signClass(
                             ts?.range_pnl ?? 0
-                        )}`}
+                        )} ${refreshing ? "animate-pulse " : ""}`}
                         title="Range P&L"
                     >
                       <span className="font-medium">{signArrow(ts?.range_pnl ?? 0)}</span>
@@ -281,14 +468,14 @@ export default function Page() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1">
-                  {(["1d", "5d", "1m", "6m", "1y"] as Timeframe[]).map((tf) => {
+                  {(["1d", "5d", "1m", "6m", "1y", "5y"] as Timeframe[]).map((tf) => {
                     const active = tf === timeframe;
                     return (
                         <button
                             key={tf}
                             onClick={() => setTimeframe(tf)}
                             className={[
-                              "rounded-full border px-3 py-1 text-sm transition",
+                              "rounded-full border px-2 py-1 text-sm transition",
                               active
                                   ? "border-slate-900 bg-slate-900 text-white"
                                   : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
@@ -352,11 +539,10 @@ export default function Page() {
                 {loadingTs ? "Loading history…" : ts ? `From ${formatDateOnly(ts.from)} to ${formatDateOnly(ts.to)}` : "—"}
               </div>
             </div>
-
             {/* Middle: Gains + allocations */}
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:col-span-3">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:col-span-3 flex flex-col">
               <div className="grid grid-cols-2 gap-3">
-                <div className={`rounded-xl border p-3 ${signClass(portfolio?.total_day_gain ?? 0)}`}>
+                <div className={`rounded-xl border p-3 ${signClass(portfolio?.total_day_gain ?? 0)} ${refreshing ? "animate-pulse " : ""}`}>
                   <div className="text-xs font-medium uppercase tracking-wide opacity-80">Day Gain</div>
                   <div className="mt-1 text-lg font-semibold">
                     {fmtMoney(portfolio?.total_day_gain ?? 0)}
@@ -364,7 +550,7 @@ export default function Page() {
                   <div className="text-sm opacity-90">{fmtPct(portfolio?.total_day_gain_percent ?? 0, 2)}</div>
                 </div>
 
-                <div className={`rounded-xl border p-3 ${signClass(portfolio?.total_pnl ?? 0)}`}>
+                <div className={`rounded-xl border p-3 ${signClass(portfolio?.total_pnl ?? 0)} ${refreshing ? "animate-pulse " : ""}`}>
                   <div className="text-xs font-medium uppercase tracking-wide opacity-80">Total Gain</div>
                   <div className="mt-1 text-lg font-semibold">{fmtMoney(portfolio?.total_pnl ?? 0)}</div>
                   <div className="text-sm opacity-90">{fmtPct(portfolio?.total_pnl_percent ?? 0, 2)}</div>
@@ -406,12 +592,25 @@ export default function Page() {
                   )}
                 </div>
               </div>
+
+              <div className="mt-auto pt-4 flex items-center justify-between text-xs text-slate-500">
+                <div className="flex items-center gap-2">
+                  {refreshing && (
+                      <div className="h-3 w-3 border-2 border-sky-500 border-t-transparent rounded-full animate-spin"></div>
+                  )}
+                  <span>{refreshing ? "Updating prices…" : "Prices updated"}</span>
+                </div>
+
+                {lastUpdated && (
+                    <span>{lastUpdated.toLocaleTimeString()}</span>
+                )}
+              </div>
             </div>
 
             {/* Right: Pie chart */}
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:col-span-3">
               <div className="text-sm font-semibold text-slate-900">Portfolio Distribution</div>
-              <div className="mt-2 h-60 w-full">
+              <div className={`mt-2 h-60 w-full ${refreshing ? "animate-pulse" : ""}`}>
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
@@ -511,14 +710,32 @@ export default function Page() {
                             <tr className="bg-white">
                               <td colSpan={11} className="px-4 py-4">
                                 <div className="rounded-xl border border-slate-200" >
-                                  <div className="flex items-center justify-between px-3 py-2">
+                                  <div className="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                                     <div className="text-xs font-semibold tracking-wide text-slate-500">
                                       Ledger Trades — {p.symbol}
                                     </div>
-                                    <div className="text-xs text-slate-500">
-                                      {loadingTrades[p.symbol]
-                                          ? "Loading…"
-                                          : `${(tradesBySymbol[p.symbol] ?? []).length} rows`}
+
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                          className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                                          onClick={() => openTradeModal(p.symbol, "BUY", p.current_price)}
+                                          type="button"
+                                      >
+                                        + New Purchase
+                                      </button>
+                                      <button
+                                          className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                                          onClick={() => openTradeModal(p.symbol, "SELL", p.current_price)}
+                                          type="button"
+                                      >
+                                        - New Sell
+                                      </button>
+
+                                      <div className="text-xs text-slate-500">
+                                        {loadingTrades[p.symbol]
+                                            ? "Loading…"
+                                            : `${(tradesBySymbol[p.symbol] ?? []).length} rows`}
+                                      </div>
                                     </div>
                                   </div>
 
@@ -531,6 +748,7 @@ export default function Page() {
                                         <th className="px-3 py-2 w-3/10">Price</th>
                                         <th className="px-3 py-2">Quantity</th>
                                         <th className="px-3 py-2">Value</th>
+                                        <th className="px-3 py-2 text-right"> </th>
                                       </tr>
                                       </thead>
                                       <tbody className="divide-y divide-slate-100">
@@ -552,13 +770,25 @@ export default function Page() {
                                               <td className="px-3 py-2 text-slate-700">{fmtMoney(Number(t.price) || 0)}</td>
                                               <td className="px-3 py-2 text-slate-700">{fmtNum(Number(t.shares) || 0, 2)}</td>
                                               <td className="px-3 py-2 text-slate-900">{fmtMoney(value)}</td>
+                                              <td className="px-3 py-2 text-right">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => deleteTrade(p.symbol, t.id)}
+                                                    disabled={deletingTradeId === t.id}
+                                                    className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white p-2 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                                                    aria-label="Delete trade"
+                                                    title="Delete"
+                                                >
+                                                  <Trash2 className="h-4 w-4" />
+                                                </button>
+                                              </td>
                                             </tr>
                                         );
                                       })}
 
                                       {!loadingTrades[p.symbol] && (tradesBySymbol[p.symbol] ?? []).length === 0 ? (
                                           <tr>
-                                            <td colSpan={5} className="px-3 py-3 text-sm text-slate-500">
+                                            <td colSpan={6} className="px-3 py-3 text-sm text-slate-500">
                                               No trades found.
                                             </td>
                                           </tr>
@@ -593,6 +823,127 @@ export default function Page() {
               </table>
             </div>
           </div>
+
+          {/* Trade modal */}
+          {tradeModal.open ? (
+              <div
+                  className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+                  onMouseDown={(e) => {
+                    // close when clicking the backdrop (not the panel)
+                    if (e.target === e.currentTarget) closeTradeModal();
+                  }}
+              >
+                <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl sm:min-w-[600px]">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="text-lg font-semibold text-slate-900">
+                        {tradeModal.type === "BUY" ? "Record a purchase" : "Record a sale"}
+                      </div>
+                      <div className="mt-1 text-sm text-slate-500">
+                        {tradeModal.symbol}
+                      </div>
+                    </div>
+
+                    <button
+                        className="rounded-full border border-slate-200 bg-white px-2 py-1 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                        onClick={closeTradeModal}
+                        disabled={savingTrade}
+                        aria-label="Close"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3 ">
+                    <div className="sm:col-span-1">
+                      <label className="block text-xs font-medium text-slate-600">Quantity</label>
+                      <div className="mt-1 flex items-center rounded-md border border-slate-200">
+                        <button
+                            className="px-3 py-1.5 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            onClick={() =>
+                                setTradeQty((q) => (q > 0 ? Number((q - SHARE_STEP).toFixed(8)) : 0))
+                            }
+                            disabled={savingTrade}
+                            type="button"
+                        >
+                          −
+                        </button>
+                        <input
+                            className="w-full border-x border-slate-200 px-1 py-1.5 text-center text-sm outline-none"
+                            type="number"
+                            min={0}
+                            step={0.00000001}
+                            value={tradeQty}
+                            onChange={(e) => setTradeQty(Number(e.target.value))}
+                            disabled={savingTrade}
+                        />
+                        <button
+                            className="px-3 py-1.5 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            onClick={() =>
+                                setTradeQty((q) => Number((q + SHARE_STEP).toFixed(8)))
+                            }
+                            disabled={savingTrade}
+                            type="button"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="sm:col-span-1">
+                      <label className="block text-xs font-medium text-slate-600">Transaction date</label>
+                      <input
+                          className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
+                          type="date"
+                          value={tradeDate}
+                          onChange={(e) => setTradeDate(e.target.value)}
+                          disabled={savingTrade}
+                      />
+                    </div>
+
+                    <div className="sm:col-span-1">
+                      <label className="block text-xs font-medium text-slate-600">Transaction price</label>
+                      <input
+                          className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
+                          type="number"
+                          step={0.01}
+                          min={0}
+                          value={tradePrice}
+                          onChange={(e) => setTradePrice(Number(e.target.value))}
+                          disabled={savingTrade}
+                      />
+                    </div>
+                  </div>
+
+                  {tradeError ? (
+                      <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                        {tradeError}
+                      </div>
+                  ) : null}
+
+                  <div className="mt-5 flex items-center justify-end gap-2">
+                    <button
+                        className="rounded-md px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                        onClick={closeTradeModal}
+                        disabled={savingTrade}
+                        type="button"
+                    >
+                      Cancel
+                    </button>
+
+                    <button
+                        className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                        onClick={submitTrade}
+                        disabled={savingTrade || !tradeModal.symbol}
+                        type="button"
+                    >
+                      {savingTrade ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+          ) : null}
+
         </div>
       </div>
   );
