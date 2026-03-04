@@ -61,6 +61,30 @@ export async function GET(req: Request) {
 
         const from = fromDate.toISOString().slice(0, 10);
 
+        if (timeframe === "1d") {
+
+            const r = await fetch(
+                `${process.env.NEXT_PUBLIC_BASE_URL}/api/portfolio?username=${username}`,
+                { cache: "no-store" }
+            );
+
+            const p = await r.json();
+
+            const yesterday_value = p.total_value - p.total_day_gain;
+            const today_value = p.total_value;
+
+            return NextResponse.json({
+                from,
+                to,
+                range_pnl: p.total_day_gain,
+                range_pnl_percent: p.total_day_gain_percent,
+                history: [
+                    { datetime: from, portfolio_value: yesterday_value },
+                    { datetime: to, portfolio_value: today_value }
+                ]
+            });
+        }
+
         const rows = await sql`
             WITH relevant_symbols AS (
               SELECT DISTINCT symbol
