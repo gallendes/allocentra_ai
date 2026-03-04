@@ -29,8 +29,8 @@ export async function GET(req: Request) {
 
         // 🔹 Get NY market date directly from Postgres
         const [{ market_date }] = await sql`
-        SELECT (NOW() AT TIME ZONE 'America/New_York')::DATE AS market_date
-      `;
+            SELECT (NOW() AT TIME ZONE 'America/New_York')::DATE AS market_date
+          `;
 
         const toDate = new Date(market_date);
         const to = market_date;
@@ -51,6 +51,9 @@ export async function GET(req: Request) {
                 break;
             case "1y":
                 fromDate = subYears(toDate, 1);
+                break;
+            case "5y":
+                fromDate = subYears(toDate, 5);
                 break;
             default:
                 fromDate = subMonths(toDate, 1);
@@ -125,13 +128,40 @@ export async function GET(req: Request) {
                     )
                 ) AS shares
               FROM closes_with_delta
+            ),
+            current_holdings AS (
+                SELECT
+                    h.symbol,
+                    MAX(h.shares) AS shares
+                FROM holdings h
+                GROUP BY h.symbol
+            ),
+            today_value AS (
+                SELECT
+                    ${to}::DATE AS dt,
+                    ROUND(SUM(ch.shares * lp.latest_price)::NUMERIC, 2) AS portfolio_value
+                FROM current_holdings ch
+                    JOIN latest_prices lp
+                ON lp.symbol = ch.symbol
+                WHERE ${to}::DATE > (SELECT MAX(dt) FROM holdings)
             )
             SELECT
-              dt AS datetime,
-              ROUND(SUM(shares * close)::NUMERIC, 2) AS portfolio_value
-            FROM holdings
-            GROUP BY dt
-            ORDER BY dt DESC
+                dt AS datetime,
+                portfolio_value
+            FROM (
+                 SELECT
+                     dt,
+                     ROUND(SUM(shares * close)::NUMERIC, 2) AS portfolio_value
+                 FROM holdings
+                 GROUP BY dt
+
+                 UNION ALL
+
+                 SELECT dt, portfolio_value
+                 FROM today_value
+             ) x
+            GROUP BY dt, portfolio_value
+            ORDER BY dt DESC;
           `;
 
         const history = rows.map((r: any) => ({
@@ -155,7 +185,7 @@ export async function GET(req: Request) {
         const range_pnl = Number((newest - oldest).toFixed(2));
         const range_pnl_percent =
             oldest !== 0
-                ? Number(((range_pnl / oldest) - 1).toFixed(4))
+                ? Number(((range_pnl / oldest)).toFixed(4))
                 : 0;
 
         return NextResponse.json({
