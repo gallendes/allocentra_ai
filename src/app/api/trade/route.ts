@@ -55,3 +55,30 @@ export async function POST(req: Request) {
         );
     }
 }
+
+export async function DELETE(req: Request) {
+    try {
+        const { searchParams } = new URL(req.url);
+
+        const idParam = searchParams.get("id");
+        const username = searchParams.get("username") ?? "sea_otter";
+        const id = Number(idParam);
+
+        if (!idParam) return bad("Missing id");
+        if (!Number.isFinite(id) || id <= 0) return bad("id must be a positive number");
+
+        const deleted = await sql`
+            DELETE FROM trades
+            WHERE id = ${id} AND username = ${username}
+            RETURNING id, username, symbol, type, executed_at, shares, price
+        `;
+
+        if (deleted.length === 0) {
+            return bad("Trade not found (or not owned by user)", 404);
+        }
+
+        return NextResponse.json(deleted[0], { status: 200 });
+    } catch (e: any) {
+        return bad(e?.message ?? "Failed to delete trade", 500);
+    }
+}
