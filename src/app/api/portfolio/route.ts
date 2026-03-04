@@ -30,20 +30,20 @@ export async function GET(req: Request) {
               WHERE t.username = ${username}
               GROUP BY t.symbol
             ),
-            prev_close AS (
-              SELECT
-                symbol,
-                MAX(CASE WHEN rn = 2 THEN close END) AS yesterday_close
-              FROM (
-                  SELECT
-                      ts.symbol,
-                      ts.close,
-                      ROW_NUMBER() OVER (PARTITION BY ts.symbol ORDER BY ts.datetime DESC) AS rn
-                  FROM time_series ts
-                  WHERE ts.symbol IN (SELECT symbol FROM trade_agg)
-                ) ranked
-              WHERE rn <= 2
-              GROUP BY symbol
+             prev_close AS (
+               SELECT
+                   ts.symbol,
+                   ts.close AS yesterday_close
+               FROM time_series ts
+               WHERE ts.symbol IN (SELECT symbol FROM trade_agg)
+                 AND ts.datetime::DATE = (
+                  SELECT MAX(t2.datetime::DATE)
+                  FROM time_series t2
+                  WHERE t2.symbol = ts.symbol
+                  AND t2.datetime::DATE < (
+                      (NOW() AT TIME ZONE 'America/New_York')::DATE
+                      )
+                  )
             ),
             volatility AS (
               SELECT
