@@ -16,6 +16,12 @@ import {
 } from "recharts";
 import { ChevronDown, Trash2 } from "lucide-react";
 
+import html2canvas from "html2canvas-pro";
+
+import { Sparkles } from "lucide-react";
+
+import ReactMarkdown from "react-markdown";
+
 type Timeframe = "1d" | "5d" | "1m" | "6m" | "1y" | "5y";
 
 type PortfolioPosition = {
@@ -179,6 +185,9 @@ export default function Page() {
   const [savingTrade, setSavingTrade] = useState(false);
   const [tradeError, setTradeError] = useState<string | null>(null);
   const [deletingTradeId, setDeletingTradeId] = useState<number | null>(null);
+  const [aiInsights, setAiInsights] = useState<string | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   const todayLabel = useMemo(() => {
     return new Date().toLocaleString(undefined, {
@@ -345,6 +354,41 @@ export default function Page() {
     setTradeModal({ open: false, symbol: null, type: "BUY" });
   }
 
+  async function handleAnalyzeWithAI() {
+    setAiLoading(true);
+    setAiError(null);
+
+    try {
+      const el = document.getElementById("dashboard");
+      if (!el) throw new Error("Dashboard element not found");
+
+      const canvas = await html2canvas(el, {
+        useCORS: true,
+        scale: 2
+      });
+
+      const image = canvas.toDataURL("image/png");
+
+      console.log("Screenshot captured", image);
+
+      const res = await fetch("/api/ai/analyze-ui", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image }),
+      });
+
+      if (!res.ok) throw new Error(`AI analysis failed: ${res.status}`);
+
+      const data = (await res.json()) as { insights?: string };
+      const insights = (data.insights ?? "").trim();
+      setAiInsights(insights || "No insights returned.");
+    } catch (e: any) {
+      setAiError(e?.message ?? "Failed to analyze dashboard");
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
   useEffect(() => {
     if (!username) return;
 
@@ -407,11 +451,28 @@ export default function Page() {
 
   return (
       <div className="min-h-screen bg-secondary">
-        <div className="mx-auto max-w-6xl px-4 py-6">
+        <div id="dashboard" className="mx-auto max-w-6xl px-4 py-6">
           {/* Header */}
-          <header className="mb-6">
-            <h1 className="text-3xl font-bold tracking-tight text-slate-900">Allocentra AI</h1>
-            <p className="mt-1 text-sm text-slate-600">AI-Powered Portfolio Intelligence</p>
+          <header className="mb-6 flex items-start justify-between">
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+                Allocentra AI
+              </h1>
+              <p className="mt-1 text-sm text-slate-600">
+                AI-Powered Portfolio Intelligence
+              </p>
+            </div>
+
+            <button
+                onClick={handleAnalyzeWithAI}
+                disabled={aiLoading}
+                className="bg-purple-600 hover:bg-purple-700 mt-4 mr-6 inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white shadow-sm transition"
+            >
+              <Sparkles
+                  className="h-4 w-4 stroke-current"
+              />
+              {aiLoading ? "Analyzing..." : "Analyze with AI"}
+            </button>
           </header>
           {/* Top row */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
@@ -794,6 +855,17 @@ export default function Page() {
               </table>
             </div>
           </div>
+
+          {(aiLoading || aiError || aiInsights) ? (
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="text-sm font-semibold text-slate-900">AI Analysis</div>
+                <div className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
+                  <ReactMarkdown>
+                    {aiLoading ? "Analyzing dashboard..." : aiError ? aiError : aiInsights}
+                  </ReactMarkdown>
+                </div>
+              </div>
+          ) : null}
 
           {/* Trade modal */}
           {tradeModal.open ? (
