@@ -79,8 +79,8 @@ export async function GET(req: Request) {
                 range_pnl: p.total_day_gain,
                 range_pnl_percent: p.total_day_gain_percent,
                 history: [
-                    { datetime: from, portfolio_value: yesterday_value },
-                    { datetime: to, portfolio_value: today_value }
+                    { datetime: to, portfolio_value: today_value },
+                    { datetime: from, portfolio_value: yesterday_value }
                 ]
             });
         }
@@ -167,7 +167,7 @@ export async function GET(req: Request) {
                 FROM current_holdings ch
                     JOIN latest_prices lp
                 ON lp.symbol = ch.symbol
-                WHERE ${to}::DATE > (SELECT MAX(dt) FROM holdings)
+                WHERE ${to}::DATE >= (SELECT MAX(dt) FROM holdings)
             )
             SELECT
                 dt AS datetime,
@@ -177,6 +177,7 @@ export async function GET(req: Request) {
                      dt,
                      ROUND(SUM(shares * close)::NUMERIC, 2) AS portfolio_value
                  FROM holdings
+                 WHERE dt < ${to}::DATE
                  GROUP BY dt
 
                  UNION ALL
@@ -211,6 +212,8 @@ export async function GET(req: Request) {
             oldest !== 0
                 ? Number(((range_pnl / oldest)))
                 : 0;
+
+        console.log("history", history);
 
         return NextResponse.json({
             from,
