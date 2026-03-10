@@ -27,6 +27,8 @@ type Timeframe = "1d" | "5d" | "1m" | "6m" | "1y" | "5y";
 type PortfolioPosition = {
   symbol: string;
   name?: string;
+  industry_sector?: string;
+  company_size?: string;
 
   current_price: number;
   shares: number;
@@ -81,6 +83,24 @@ type TradeRow = {
   price: number;
 };
 
+type AIAction = {
+  label: string;
+  action:
+      | "rebalance"
+      | "open_trades"
+      | "analyze_symbol"
+      | "analyze_timeframe"
+      | "buy"
+      | "sell";
+  symbol?: string;
+  timeframe?: string;
+};
+
+type AIResponse = {
+  insights: string;
+  actions: AIAction[];
+};
+
 const SHARE_STEP = 1;
 
 function fmtMoney(n: number, digits = 2) {
@@ -95,7 +115,13 @@ function fmtMoney(n: number, digits = 2) {
 
 function fmtPct(n: number, digits = 2) {
   const x = Number.isFinite(n) ? n : 0;
-  return `${(x * 100).toFixed(digits)}%`;
+
+  const formatted = new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(x * 100);
+
+  return `${formatted}%`;
 }
 
 function fmtNum(n: number, digits = 2) {
@@ -132,6 +158,19 @@ function labelizeKey(k: string) {
       .replace(/_/g, " ")
       .replace(/\b\w/g, (c) => c.toUpperCase())
       .trim();
+}
+
+function formatCompanySizeLabel(value?: string) {
+  switch (value) {
+    case "mega_cap":
+      return "Mega Cap";
+    case "large_cap":
+      return "Large Cap";
+    case "small_cap":
+      return "Small Cap";
+    default:
+      return value ? labelizeKey(value) : "—";
+  }
 }
 
 function signClass(v: number) {
@@ -186,8 +225,10 @@ export default function Page() {
   const [tradeError, setTradeError] = useState<string | null>(null);
   const [deletingTradeId, setDeletingTradeId] = useState<number | null>(null);
   const [aiInsights, setAiInsights] = useState<string | null>(null);
+  const [aiActions, setAiActions] = useState<AIAction[]>([]);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
 
   const todayLabel = useMemo(() => {
     return new Date().toLocaleString(undefined, {
@@ -256,6 +297,22 @@ export default function Page() {
       return [];
     } finally {
       setLoadingTrades((m) => ({ ...m, [symbol]: false }));
+    }
+  }
+
+  async function fetchPriceForDate(symbol: string, date: string) {
+    try {
+      const res = await fetch(
+          `/api/price-at-date?symbol=${symbol}&date=${date}`
+      );
+
+      if (!res.ok) return;
+
+      const data = await res.json();
+
+      setTradePrice(Number(data.price));
+    } catch (err) {
+      console.error("Price lookup error:", err);
     }
   }
 
@@ -354,7 +411,17 @@ export default function Page() {
     setTradeModal({ open: false, symbol: null, type: "BUY" });
   }
 
-  async function handleAnalyzeWithAI() {
+
+  async function handleAnalyzeWithAI(rerun: boolean = false) {
+    if (aiInsights && !rerun) {
+      console.log("AI insights:", aiInsights);
+      setAiPanelOpen(true);
+      return;
+    }
+
+    setAiInsights(null);
+    setAiActions([]);
+    setAiPanelOpen(true);
     setAiLoading(true);
     setAiError(null);
 
@@ -369,23 +436,59 @@ export default function Page() {
 
       const image = canvas.toDataURL("image/png");
 
-      console.log("Screenshot captured", image);
-
       const res = await fetch("/api/ai/analyze-ui", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ image }),
       });
 
-      if (!res.ok) throw new Error(`AI analysis failed: ${res.status}`);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
 
-      const data = (await res.json()) as { insights?: string };
+        throw new Error(
+            errData?.error || `AI analysis failed (${res.status})`
+        );
+      }
+
+      const data = await res.json();
+      console.log("AI analysis response:", data);
+
       const insights = (data.insights ?? "").trim();
       setAiInsights(insights || "No insights returned.");
+      const actions = (data.actions ?? []);
+      setAiActions(actions)
     } catch (e: any) {
       setAiError(e?.message ?? "Failed to analyze dashboard");
     } finally {
       setAiLoading(false);
+    }
+  }
+
+  function handleAIAction(a: AIAction) {
+    switch (a.action) {
+      case "open_trades":
+        console.log("Open trades action");
+        break;
+
+      case "analyze_symbol":
+        console.log("Analyze symbol action");
+        break;
+
+      case "analyze_timeframe":
+        console.log("Analyze timeframe action");
+        break;
+
+      case "rebalance":
+        console.log("AI suggested rebalance");
+        break;
+
+      case "buy":
+        console.log("Buy action");
+        break;
+
+      case "sell":
+        console.log("Sell action");
+        break;
     }
   }
 
@@ -449,9 +552,11 @@ export default function Page() {
 
   const colors = ["#16A34A","#60A5FA","#F59E0B","#84CC16","#06B6D4","#6366F1","#F97316","#0ea5e9"];
 
+  const cleanedInsights = aiInsights?.replace(/\n\s*\n+/g, "\n\n");
+
   return (
       <div className="min-h-screen bg-secondary">
-        <div id="dashboard" className="mx-auto max-w-6xl px-4 py-6">
+        <div id="dashboard" className="mx-auto w-full max-w-[88rem] px-4 py-6 origin-top" style={{ transform:"scale(0.95)"}}>
           {/* Header */}
           <header className="mb-6 flex items-start justify-between">
             <div>
@@ -462,17 +567,6 @@ export default function Page() {
                 AI-Powered Portfolio Intelligence
               </p>
             </div>
-
-            <button
-                onClick={handleAnalyzeWithAI}
-                disabled={aiLoading}
-                className="bg-purple-600 hover:bg-purple-700 mt-4 mr-6 inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white shadow-sm transition"
-            >
-              <Sparkles
-                  className="h-4 w-4 stroke-current"
-              />
-              {aiLoading ? "Analyzing..." : "Analyze with AI"}
-            </button>
           </header>
           {/* Top row */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
@@ -595,12 +689,14 @@ export default function Page() {
                 </div>
                 <div className="mt-2 space-y-2">
                   {industryRows.length === 0 ? (
-                      <div className="text-sm text-slate-500">—</div>
+                      <div className="text-xs text-slate-500">—</div>
                   ) : (
-                      industryRows.map(([k, v]) => (
+                      industryRows
+                          .filter(([_, v]) => v !== 0)
+                          .map(([k, v]) => (
                           <div key={k} className="flex items-center justify-between gap-3">
-                            <div className="truncate text-sm text-slate-800">{labelizeKey(k)}</div>
-                            <div className="text-sm font-medium text-slate-900">{fmtPct(v / 100, 1)}</div>
+                            <div className="truncate text-xs text-slate-800">{labelizeKey(k)}</div>
+                            <div className="text-xs font-medium text-slate-900">{fmtPct(v / 100, 1)}</div>
                           </div>
                       ))
                   )}
@@ -613,12 +709,14 @@ export default function Page() {
                 </div>
                 <div className="mt-2 space-y-2">
                   {sizeRows.length === 0 ? (
-                      <div className="text-sm text-slate-500">—</div>
+                      <div className="text-xs text-slate-500">—</div>
                   ) : (
-                      sizeRows.map(([k, v]) => (
+                      sizeRows
+                          .filter(([_, v]) => v !== 0)
+                          .map(([k, v]) => (
                           <div key={k} className="flex items-center justify-between gap-3">
-                            <div className="truncate text-sm text-slate-800">{labelizeKey(k)}</div>
-                            <div className="text-sm font-medium text-slate-900">{fmtPct(v / 100, 1)}</div>
+                            <div className="truncate text-xs text-slate-800">{labelizeKey(k)}</div>
+                            <div className="text-xs font-medium text-slate-900">{fmtPct(v / 100, 1)}</div>
                           </div>
                       ))
                   )}
@@ -680,20 +778,22 @@ export default function Page() {
             ) : null}
 
             <div className="overflow-x-auto border-t border-slate-200">
-              <table className="w-full min-w-[1100px] text-left text-sm">
+              <table className="w-full min-w-[1360px] text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
-                  <th className="px-4 py-3">Symbol</th>
-                  <th className="px-4 py-3">Name</th>
-                  <th className="px-4 py-3">Price</th>
-                  <th className="px-4 py-3">Quantity</th>
-                  <th className="px-4 py-3"></th>
-                  <th className="px-4 py-3">Day Gain</th>
-                  <th className="px-4 py-3"></th>
-                  <th className="px-4 py-3">Total Gain</th>
-                  <th className="px-4 py-3">Value</th>
-                  <th className="px-4 py-3">Volatility (1Y)</th>
-                  <th className="px-4 py-3"></th>
+                  <th className="w-[96px] px-4 py-3">Symbol</th>
+                  <th className="min-w-[170px] px-4 py-3">Name</th>
+                  <th className="min-w-[210px] px-4 py-3 whitespace-nowrap">Industry Sector</th>
+                  <th className="min-w-[130px] px-4 py-3 whitespace-nowrap">Company Size</th>
+                  <th className="w-[110px] px-4 py-3">Price</th>
+                  <th className="w-[90px] px-4 py-3">Quantity</th>
+                  <th className="w-[120px] px-4 py-3"></th>
+                  <th className="w-[120px] px-4 py-3">Day Gain</th>
+                  <th className="w-[120px] px-4 py-3"></th>
+                  <th className="w-[120px] px-4 py-3">Total Gain</th>
+                  <th className="w-[110px] px-4 py-3">Value</th>
+                  <th className="w-[120px] px-4 py-3">Volatility (1Y)</th>
+                  <th className="w-[60px] px-4 py-3"></th>
                 </tr>
                 </thead>
 
@@ -703,10 +803,12 @@ export default function Page() {
                   return (
                       <React.Fragment key={p.symbol}>
                         <tr className="hover:bg-slate-50/60">
-                          <td className="px-4 py-3 font-medium text-slate-900">{p.symbol}</td>
+                          <td className="px-4 py-3 font-medium text-slate-900 whitespace-nowrap">{p.symbol}</td>
                           <td className="px-4 py-3 text-slate-700">{p.name ?? "—"}</td>
-                          <td className="px-4 py-3 text-slate-700">{fmtMoney(p.current_price ?? 0)}</td>
-                          <td className="px-4 py-3 text-slate-700">{fmtNum(p.shares ?? 0, 2)}</td>
+                          <td className="min-w-[210px] px-4 py-3 text-slate-700">{p.industry_sector ?? "—"}</td>
+                          <td className="px-4 py-3 text-slate-700 whitespace-nowrap">{formatCompanySizeLabel(p.company_size)}</td>
+                          <td className="px-4 py-3 text-slate-700 whitespace-nowrap">{fmtMoney(p.current_price ?? 0)}</td>
+                          <td className="px-4 py-3 text-slate-700 whitespace-nowrap">{fmtNum(p.shares ?? 0, 2)}</td>
                           <td className={`px-4 py-3 ${p.day_gain >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
                             {fmtMoney(p.day_gain ?? 0)}
                           </td>
@@ -740,7 +842,7 @@ export default function Page() {
 
                         {isOpen ? (
                             <tr className="bg-white">
-                              <td colSpan={11} className="px-4 py-4">
+                              <td colSpan={13} className="px-4 py-4">
                                 <div className="rounded-xl border border-slate-200" >
                                   <div className="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                                     <div className="text-xs font-semibold tracking-wide text-slate-500">
@@ -838,7 +940,7 @@ export default function Page() {
 
                 {!anyLoading && (portfolio?.positions?.length ?? 0) === 0 ? (
                     <tr>
-                      <td colSpan={11} className="px-4 py-6 text-sm text-slate-500">
+                      <td colSpan={13} className="px-4 py-6 text-sm text-slate-500">
                         No positions yet.
                       </td>
                     </tr>
@@ -846,7 +948,7 @@ export default function Page() {
 
                 {anyLoading && !portfolio ? (
                     <tr>
-                      <td colSpan={11} className="px-4 py-6 text-sm text-slate-500">
+                      <td colSpan={13} className="px-4 py-6 text-sm text-slate-500">
                         Loading…
                       </td>
                     </tr>
@@ -856,16 +958,16 @@ export default function Page() {
             </div>
           </div>
 
-          {(aiLoading || aiError || aiInsights) ? (
-              <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="text-sm font-semibold text-slate-900">AI Analysis</div>
-                <div className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
-                  <ReactMarkdown>
-                    {aiLoading ? "Analyzing dashboard..." : aiError ? aiError : aiInsights}
-                  </ReactMarkdown>
-                </div>
-              </div>
-          ) : null}
+          {/*{(aiLoading || aiError || aiInsights) ? (*/}
+          {/*    <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">*/}
+          {/*      <div className="text-sm font-semibold text-slate-900">AI Analysis</div>*/}
+          {/*      <div className="mt-2 whitespace-pre-wrap text-sm text-slate-700">*/}
+          {/*        <ReactMarkdown>*/}
+          {/*          {aiLoading ? "Analyzing dashboard..." : aiError ? aiError : aiInsights}*/}
+          {/*        </ReactMarkdown>*/}
+          {/*      </div>*/}
+          {/*    </div>*/}
+          {/*) : null}*/}
 
           {/* Trade modal */}
           {tradeModal.open ? (
@@ -939,7 +1041,13 @@ export default function Page() {
                           className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
                           type="date"
                           value={tradeDate}
-                          onChange={(e) => setTradeDate(e.target.value)}
+                          onChange={(e) => {
+                            const newDate = e.target.value;
+                            setTradeDate(e.target.value);
+                            if (tradeModal.symbol && newDate) {
+                              fetchPriceForDate(tradeModal.symbol, newDate);
+                            }
+                          }}
                           disabled={savingTrade}
                       />
                     </div>
@@ -947,7 +1055,7 @@ export default function Page() {
                     <div className="sm:col-span-1">
                       <label className="block text-xs font-medium text-slate-600">Transaction price</label>
                       <input
-                          className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
+                          className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200 transition-all duration-200 hover:border-slate-300"
                           type="number"
                           step={0.01}
                           min={0}
@@ -986,8 +1094,88 @@ export default function Page() {
                 </div>
               </div>
           ) : null}
-
         </div>
+
+        {/* AI Floating Action Button */}
+        <div className="fixed bottom-6 right-6 z-40">
+          <button
+              onClick={() => handleAnalyzeWithAI()}
+              disabled={aiLoading}
+              className="flex items-center justify-center w-14 h-14 rounded-full bg-purple-600 text-white shadow-lg hover:bg-purple-700 transition disabled:opacity-50"
+          >
+            <Sparkles className={`h-6 w-6 ${aiLoading ? "animate-pulse" : ""}`} />
+          </button>
+        </div>
+
+        {aiPanelOpen && (
+            <div className="fixed bottom-6 right-6 z-50 w-[calc(100vw-3rem)] max-w-[420px]">
+
+              <div className="flex max-h-[min(630px,calc(100vh-3rem))] flex-col rounded-2xl border border-slate-200 bg-white shadow-xl">
+
+                <div className="flex items-center justify-between border-b px-4 py-3">
+                  <div className="flex items-center gap-2 font-semibold text-slate-900">
+                    <Sparkles className="h-4 w-4 text-purple-600" />
+                    AI Portfolio Analyst
+                  </div>
+
+                  <button
+                      onClick={() => handleAnalyzeWithAI(true)}
+                      disabled={aiLoading}
+                      className="text-xs rounded-md border border-slate-200 px-2 py-1 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    {aiLoading ? "Running..." : "Re-run"}
+                  </button>
+
+                  {aiLoading && (
+                      <div className="h-3 w-3 border-2 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
+                  )}
+
+                  <button
+                      onClick={() => setAiPanelOpen(false)}
+                      className="text-slate-500 hover:text-slate-900"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="min-h-0 flex-1 overflow-y-auto p-4 text-xs text-slate-700 whitespace-pre-wrap">
+
+                  <ReactMarkdown
+                      components={{p: ({ children }) => <span>{children}</span>}}
+                  >
+                    {aiLoading
+                        ? "Analyzing dashboard..."
+                        : aiError
+                            ? aiError
+                            : cleanedInsights ?? "Run analysis to generate insights."}
+                  </ReactMarkdown>
+
+                </div>
+
+                {aiActions.length > 0 && (
+                    <div className="sticky bottom-0 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-white/85">
+                      <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                        Suggested Actions
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {aiActions.map((a, i) => (
+                            <button
+                                key={i}
+                                onClick={() => handleAIAction(a)}
+                                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 transition"
+                            >
+                              {a.label}
+                            </button>
+                        ))}
+                      </div>
+                    </div>
+                )}
+
+              </div>
+
+            </div>
+        )}
+
       </div>
   );
 }

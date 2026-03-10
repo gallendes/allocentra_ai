@@ -84,7 +84,7 @@ async function main() {
 
     if (!symbol || !start || !end) {
         console.error(
-            `Usage: npx tsx scripts/backfill.ts <SYMBOL> <YYYY-MM-DD> <YYYY-MM-DD> [NAME]`
+            `Usage: npx tsx src/scripts/backfill.ts <SYMBOL> <YYYY-MM-DD> <YYYY-MM-DD> [NAME]`
         );
         process.exit(1);
     }
