@@ -59,7 +59,7 @@ export async function GET(req: Request) {
                 fromDate = subMonths(toDate, 1);
         }
 
-        const from = fromDate.toISOString().slice(0, 10);
+        const from = fromDate.toISOString()
 
         if (timeframe === "1d") {
 
@@ -212,8 +212,6 @@ export async function GET(req: Request) {
             oldest !== 0
                 ? Number(((range_pnl / oldest)))
                 : 0;
-
-        console.log("history", history);
 
         return NextResponse.json({
             from,

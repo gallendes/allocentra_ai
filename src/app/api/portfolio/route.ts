@@ -61,7 +61,7 @@ export async function GET(req: Request) {
               GROUP BY symbol
             )
             SELECT
-              a.symbol,
+              s.symbol,
               s.name,
               a.shares,
               a.net_purchases,
@@ -70,13 +70,12 @@ export async function GET(req: Request) {
               s.company_size,
               v.volatility,
               prev.yesterday_close
-            FROM trade_agg a
-            JOIN latest_prices lp ON lp.symbol = a.symbol
-            JOIN symbols s ON s.symbol = a.symbol
-            LEFT JOIN prev_close prev ON prev.symbol = a.symbol
-            LEFT JOIN volatility v ON v.symbol = a.symbol
-            WHERE a.shares <> 0
-            ORDER BY a.symbol ASC
+            FROM symbols s
+             LEFT JOIN trade_agg a ON a.symbol = s.symbol
+             LEFT JOIN latest_prices lp ON lp.symbol = s.symbol
+             LEFT JOIN prev_close prev ON prev.symbol = s.symbol
+             LEFT JOIN volatility v ON v.symbol = s.symbol
+            ORDER BY s.symbol ASC
           `;
 
         // Build positions
