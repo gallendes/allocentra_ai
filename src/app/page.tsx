@@ -24,6 +24,7 @@ import ReactMarkdown from "react-markdown";
 import type {
   AnalyzeUIResponse,
   QuickAction,
+  RebalanceTrade,
   StrategicAction,
 } from "@/lib/ai/contracts";
 import { executeRebalancePlan } from "@/lib/ai/rebalanceExecutor";
@@ -91,6 +92,12 @@ type TradeRow = {
 };
 
 const SHARE_STEP = 1;
+const STRATEGIC_ACTION_LOCKED_STRATEGIES = new Set([
+  "equal_weight",
+  "sell_company_size",
+  "sell_industry",
+  "sell_volatile",
+]);
 
 function fmtMoney(n: number, digits = 2) {
   const x = Number.isFinite(n) ? n : 0;
@@ -199,6 +206,19 @@ function safeRecordEntries(obj?: Record<string, number>) {
       .sort((a, b) => b[1] - a[1]);
 }
 
+function formatTradeSymbolSummary(trades: RebalanceTrade[], side: "buy" | "sell") {
+  const symbols = [...new Set(
+    trades
+      .filter((trade) => trade.side === side)
+      .map((trade) => trade.symbol)
+      .filter(Boolean)
+  )];
+
+  if (symbols.length === 0) return null;
+  if (symbols.length <= 2) return `${side === "buy" ? "Buy" : "Sell"}: ${symbols.join(", ")}`;
+  return `${side === "buy" ? "Buy" : "Sell"}: ${symbols.slice(0, 2).join(", ")} +${symbols.length - 2}`;
+}
+
 export default function Page() {
   const [username] = useState("sea_otter");
 
@@ -237,6 +257,7 @@ export default function Page() {
   const [aiExecutingAction, setAiExecutingAction] = useState<string | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [hasExecutedStrategicAction, setHasExecutedStrategicAction] = useState(false);
   const [highlightedIndustry, setHighlightedIndustry] = useState<string | null>(null);
   const [highlightedCompanySize, setHighlightedCompanySize] = useState<string | null>(null);
 
@@ -494,6 +515,7 @@ export default function Page() {
       setAiInsights(insights || "No insights returned.");
       setStrategicActions(Array.isArray(data.strategic_actions) ? data.strategic_actions : []);
       setQuickActions(Array.isArray(data.quick_actions) ? data.quick_actions : []);
+      setHasExecutedStrategicAction(false);
     } catch (e: unknown) {
       setAiError(e instanceof Error ? e.message : "Failed to analyze dashboard");
     } finally {
@@ -534,6 +556,7 @@ export default function Page() {
 
     try {
       await executeRebalancePlan(action.rebalance_plan, { username });
+      setHasExecutedStrategicAction(true);
 
       const touchedSymbols = [...new Set(action.rebalance_plan.trades.map((trade) => trade.symbol))]
         .filter((symbol) => tradesBySymbol[symbol]);
@@ -1212,7 +1235,17 @@ export default function Page() {
                 <div className="min-h-0 overflow-y-auto border-b border-slate-200 p-4 text-xs text-slate-700 whitespace-pre-wrap md:border-b-0 md:border-r">
 
                   <ReactMarkdown
-                      components={{p: ({ children }) => <span>{children}</span>}}
+                      components={{
+                        h2: ({ children }) => (
+                            <h2 className="text-sm font-semibold text-slate-900">{children}</h2>
+                        ),
+                        h3: ({ children }) => (
+                            <h3 className="mt-3 mb-1 text-xs font-semibold uppercase tracking-[0.08em] text-slate-700">{children}</h3>
+                        ),
+                        p: ({ children }) => <p className="mb-2">{children}</p>,
+                        ul: ({ children }) => <ul className="list-disc pl-4">{children}</ul>,
+                        li: ({ children }) => <li>{children}</li>,
+                      }}
                   >
                     {aiLoading
                         ? "Analyzing dashboard..."
@@ -1237,18 +1270,27 @@ export default function Page() {
                               {strategicActions.map((action) => {
                                 const actionKey = getAIActionKey(action);
                                 const isRunning = aiExecutingAction === actionKey;
+                                const isLockedStrategy =
+                                  hasExecutedStrategicAction &&
+                                  STRATEGIC_ACTION_LOCKED_STRATEGIES.has(action.strategy);
+                                const buySummary = formatTradeSymbolSummary(action.rebalance_plan.trades, "buy");
+                                const sellSummary = formatTradeSymbolSummary(action.rebalance_plan.trades, "sell");
+                                const tradeSummary = [buySummary, sellSummary].filter(Boolean).join(" · ");
                                 return (
                                     <button
                                         key={actionKey}
                                         onClick={() => handleStrategicAction(action)}
-                                        disabled={isRunning}
+                                        disabled={isRunning || isLockedStrategy}
                                         className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-left transition hover:bg-slate-100 disabled:opacity-60"
                                     >
                                       <div className="flex items-center justify-between gap-3">
                                         <div className="text-xs font-semibold text-slate-900">{action.label}</div>
 
                                       </div>
-                                      <div className="mt-1 text-[11px] text-slate-500">
+                                      <div
+                                        className="mt-1 text-[11px] text-slate-500"
+                                        title={tradeSummary || undefined}
+                                      >
                                         {action.rebalance_plan.trade_count} trades · {fmtMoney(action.rebalance_plan.buy_value)} buy · {fmtMoney(action.rebalance_plan.sell_value)} sell
                                       </div>
                                     </button>
