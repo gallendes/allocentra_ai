@@ -21,6 +21,13 @@ import html2canvas from "html2canvas-pro";
 import { Sparkles } from "lucide-react";
 
 import ReactMarkdown from "react-markdown";
+import type {
+  AnalyzeUIResponse,
+  QuickAction,
+  StrategicAction,
+} from "@/lib/ai/contracts";
+import { executeRebalancePlan } from "@/lib/ai/rebalanceExecutor";
+import { performQuickAction } from "@/lib/ai/uiActions";
 
 type Timeframe = "1d" | "5d" | "1m" | "6m" | "1y" | "5y";
 
@@ -83,24 +90,6 @@ type TradeRow = {
   price: number;
 };
 
-type AIAction = {
-  label: string;
-  action:
-      | "rebalance"
-      | "open_trades"
-      | "analyze_symbol"
-      | "analyze_timeframe"
-      | "buy"
-      | "sell";
-  symbol?: string;
-  timeframe?: string;
-};
-
-type AIResponse = {
-  insights: string;
-  actions: AIAction[];
-};
-
 const SHARE_STEP = 1;
 
 function fmtMoney(n: number, digits = 2) {
@@ -158,6 +147,14 @@ function labelizeKey(k: string) {
       .replace(/_/g, " ")
       .replace(/\b\w/g, (c) => c.toUpperCase())
       .trim();
+}
+
+function toEnumKey(value?: string) {
+  return String(value ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
 }
 
 function formatCompanySizeLabel(value?: string) {
@@ -225,10 +222,14 @@ export default function Page() {
   const [tradeError, setTradeError] = useState<string | null>(null);
   const [deletingTradeId, setDeletingTradeId] = useState<number | null>(null);
   const [aiInsights, setAiInsights] = useState<string | null>(null);
-  const [aiActions, setAiActions] = useState<AIAction[]>([]);
+  const [strategicActions, setStrategicActions] = useState<StrategicAction[]>([]);
+  const [quickActions, setQuickActions] = useState<QuickAction[]>([]);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiExecutingAction, setAiExecutingAction] = useState<string | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [highlightedIndustry, setHighlightedIndustry] = useState<string | null>(null);
+  const [highlightedCompanySize, setHighlightedCompanySize] = useState<string | null>(null);
 
   const todayLabel = useMemo(() => {
     return new Date().toLocaleString(undefined, {
@@ -319,6 +320,32 @@ export default function Page() {
   async function ensureTrades(symbol: string) {
     if (tradesBySymbol[symbol]) return;
     await fetchTradesForSymbol(symbol);
+  }
+
+  function flashIndustry(industry: string) {
+    setHighlightedIndustry(industry);
+    window.setTimeout(() => {
+      setHighlightedIndustry((current) => (current === industry ? null : current));
+    }, 1800);
+  }
+
+  function flashCompanySize(companySize: string) {
+    setHighlightedCompanySize(companySize);
+    window.setTimeout(() => {
+      setHighlightedCompanySize((current) => (current === companySize ? null : current));
+    }, 1800);
+  }
+
+  function getAIActionKey(action: { action: string; label: string; strategy?: string; symbol?: string; timeframe?: string; industry?: string; company_size?: string; }) {
+    return [
+      action.action,
+      action.label,
+      action.strategy ?? "",
+      action.symbol ?? "",
+      action.timeframe ?? "",
+      action.industry ?? "",
+      action.company_size ?? "",
+    ].join("|");
   }
 
   async function submitTrade() {
@@ -420,7 +447,8 @@ export default function Page() {
     }
 
     setAiInsights(null);
-    setAiActions([]);
+    setStrategicActions([]);
+    setQuickActions([]);
     setAiPanelOpen(true);
     setAiLoading(true);
     setAiError(null);
@@ -439,7 +467,7 @@ export default function Page() {
       const res = await fetch("/api/ai/analyze-ui", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image }),
+        body: JSON.stringify({ image, username }),
       });
 
       if (!res.ok) {
@@ -450,45 +478,66 @@ export default function Page() {
         );
       }
 
-      const data = await res.json();
+      const data = (await res.json()) as AnalyzeUIResponse;
       console.log("AI analysis response:", data);
 
       const insights = (data.insights ?? "").trim();
       setAiInsights(insights || "No insights returned.");
-      const actions = (data.actions ?? []);
-      setAiActions(actions)
-    } catch (e: any) {
-      setAiError(e?.message ?? "Failed to analyze dashboard");
+      setStrategicActions(Array.isArray(data.strategic_actions) ? data.strategic_actions : []);
+      setQuickActions(Array.isArray(data.quick_actions) ? data.quick_actions : []);
+    } catch (e: unknown) {
+      setAiError(e instanceof Error ? e.message : "Failed to analyze dashboard");
     } finally {
       setAiLoading(false);
     }
   }
 
-  function handleAIAction(a: AIAction) {
-    switch (a.action) {
-      case "open_trades":
-        console.log("Open trades action");
-        break;
+  async function handleQuickAction(action: QuickAction) {
+    const actionKey = getAIActionKey(action);
+    setAiExecutingAction(actionKey);
+    setAiError(null);
 
-      case "analyze_symbol":
-        console.log("Analyze symbol action");
-        break;
+    try {
+      await performQuickAction(action, {
+        setExpanded,
+        ensureTrades,
+        setTimeframe,
+        flashIndustry,
+        flashCompanySize,
+      });
+    } catch (e: unknown) {
+      setAiError(e instanceof Error ? e.message : "Failed to run quick action");
+    } finally {
+      setAiExecutingAction(null);
+    }
+  }
 
-      case "analyze_timeframe":
-        console.log("Analyze timeframe action");
-        break;
+  async function handleStrategicAction(action: StrategicAction) {
+    const actionKey = getAIActionKey(action);
 
-      case "rebalance":
-        console.log("AI suggested rebalance");
-        break;
+    if (action.rebalance_plan.trades.length === 0) {
+      setAiError("This rebalance plan does not contain any executable trades.");
+      return;
+    }
 
-      case "buy":
-        console.log("Buy action");
-        break;
+    setAiExecutingAction(actionKey);
+    setAiError(null);
 
-      case "sell":
-        console.log("Sell action");
-        break;
+    try {
+      await executeRebalancePlan(action.rebalance_plan, { username });
+
+      const touchedSymbols = [...new Set(action.rebalance_plan.trades.map((trade) => trade.symbol))]
+        .filter((symbol) => tradesBySymbol[symbol]);
+
+      await Promise.all([
+        fetchPortfolio(),
+        fetchTimeSeries(timeframe),
+        ...touchedSymbols.map((symbol) => fetchTradesForSymbol(symbol)),
+      ]);
+    } catch (e: unknown) {
+      setAiError(e instanceof Error ? e.message : "Failed to execute rebalance plan");
+    } finally {
+      setAiExecutingAction(null);
     }
   }
 
@@ -800,9 +849,20 @@ export default function Page() {
                 <tbody className="divide-y divide-slate-100">
                 {(portfolio?.positions ?? []).map((p) => {
                   const isOpen = !!expanded[p.symbol];
+                  const industryMatch =
+                    highlightedIndustry &&
+                    toEnumKey(p.industry_sector) === toEnumKey(highlightedIndustry);
+                  const sizeMatch =
+                    highlightedCompanySize &&
+                    toEnumKey(p.company_size) === toEnumKey(highlightedCompanySize);
+                  const rowHighlightClass = industryMatch
+                    ? "bg-amber-50/90 animate-pulse"
+                    : sizeMatch
+                        ? "bg-sky-50/90 animate-pulse"
+                        : "hover:bg-slate-50/60";
                   return (
                       <React.Fragment key={p.symbol}>
-                        <tr className="hover:bg-slate-50/60">
+                        <tr className={rowHighlightClass}>
                           <td className="px-4 py-3 font-medium text-slate-900 whitespace-nowrap">{p.symbol}</td>
                           <td className="px-4 py-3 text-slate-700">{p.name ?? "—"}</td>
                           <td className="min-w-[210px] px-4 py-3 text-slate-700">{p.industry_sector ?? "—"}</td>
@@ -1108,9 +1168,9 @@ export default function Page() {
         </div>
 
         {aiPanelOpen && (
-            <div className="fixed bottom-6 right-6 z-50 w-[calc(100vw-3rem)] max-w-[420px]">
+            <div className="fixed bottom-6 right-6 z-50 w-[calc(100vw-3rem)] max-w-[700px]">
 
-              <div className="flex max-h-[min(630px,calc(100vh-3rem))] flex-col rounded-2xl border border-slate-200 bg-white shadow-xl">
+              <div className="flex max-h-[min(720px,calc(100vh-3rem))] flex-col rounded-2xl border border-slate-200 bg-white shadow-xl">
 
                 <div className="flex items-center justify-between border-b px-4 py-3">
                   <div className="flex items-center gap-2 font-semibold text-slate-900">
@@ -1118,6 +1178,7 @@ export default function Page() {
                     AI Portfolio Analyst
                   </div>
 
+                  <div className="ml-auto flex items-center gap-3">
                   <button
                       onClick={() => handleAnalyzeWithAI(true)}
                       disabled={aiLoading}
@@ -1134,42 +1195,87 @@ export default function Page() {
                       onClick={() => setAiPanelOpen(false)}
                       className="text-slate-500 hover:text-slate-900"
                   >
-                    ✕
+                    <ChevronDown className="h-4 w-4" />
                   </button>
+                  </div>
                 </div>
 
-                <div className="min-h-0 flex-1 overflow-y-auto p-4 text-xs text-slate-700 whitespace-pre-wrap">
+                <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-2">
+                <div className="min-h-0 overflow-y-auto border-b border-slate-200 p-4 text-xs text-slate-700 whitespace-pre-wrap md:border-b-0 md:border-r">
 
                   <ReactMarkdown
                       components={{p: ({ children }) => <span>{children}</span>}}
                   >
                     {aiLoading
                         ? "Analyzing dashboard..."
-                        : aiError
-                            ? aiError
-                            : cleanedInsights ?? "Run analysis to generate insights."}
+                        : cleanedInsights ?? "Run analysis to generate insights."}
                   </ReactMarkdown>
 
+                  {aiError ? (
+                      <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-700">
+                        {aiError}
+                      </div>
+                  ) : null}
                 </div>
 
-                {aiActions.length > 0 && (
-                    <div className="sticky bottom-0 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-white/85">
-                      <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                        Suggested Actions
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {aiActions.map((a, i) => (
-                            <button
-                                key={i}
-                                onClick={() => handleAIAction(a)}
-                                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 transition"
-                            >
-                              {a.label}
-                            </button>
-                        ))}
-                      </div>
+                {(strategicActions.length > 0 || quickActions.length > 0) && (
+                    <div className="min-h-0 overflow-y-auto bg-white/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-white/85">
+                      {strategicActions.length > 0 ? (
+                          <div>
+                            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                              Strategic Actions
+                            </div>
+                            <div className="space-y-2">
+                              {strategicActions.map((action) => {
+                                const actionKey = getAIActionKey(action);
+                                const isRunning = aiExecutingAction === actionKey;
+                                return (
+                                    <button
+                                        key={actionKey}
+                                        onClick={() => handleStrategicAction(action)}
+                                        disabled={isRunning}
+                                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-left transition hover:bg-slate-100 disabled:opacity-60"
+                                    >
+                                      <div className="flex items-center justify-between gap-3">
+                                        <div className="text-xs font-semibold text-slate-900">{action.label}</div>
+
+                                      </div>
+                                      <div className="mt-1 text-[11px] text-slate-500">
+                                        {action.rebalance_plan.trade_count} trades · {fmtMoney(action.rebalance_plan.buy_value)} buy · {fmtMoney(action.rebalance_plan.sell_value)} sell
+                                      </div>
+                                    </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                      ) : null}
+
+                      {quickActions.length > 0 ? (
+                          <div className={strategicActions.length > 0 ? "mt-4" : ""}>
+                            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                              Quick Actions
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {quickActions.map((action) => {
+                                const actionKey = getAIActionKey(action);
+                                const isRunning = aiExecutingAction === actionKey;
+                                return (
+                                    <button
+                                        key={actionKey}
+                                        onClick={() => handleQuickAction(action)}
+                                        disabled={isRunning}
+                                        className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:opacity-60"
+                                    >
+                                      {action.label}
+                                    </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                      ) : null}
                     </div>
                 )}
+                </div>
 
               </div>
 

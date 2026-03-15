@@ -1,0 +1,14 @@
+{
+  "name": "analyze-ui-service",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "functions-framework --target=main"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "@google-cloud/functions-framework": "^5.0.2",
+    "@google/genai": "^1.22.0",
+    "@neondatabase/serverless": "^1.0.2"
+  }
+}

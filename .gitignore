@@ -2,6 +2,7 @@
 
 # cloud run dependencies
 /cloudrun/prices_worker/node_modules
+/cloudrun/analyze_ui/node_modules
 
 # dependencies
 /node_modules
