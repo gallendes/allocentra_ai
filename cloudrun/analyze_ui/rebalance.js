@@ -113,17 +113,6 @@ function finalizePlan(trades) {
     };
 }
 
-function selectTopTercile(positions, sortValue) {
-    if (positions.length === 0) {
-        return [];
-    }
-
-    const count = Math.max(1, Math.ceil(positions.length / 3));
-    return [...positions]
-        .sort((left, right) => sortValue(right) - sortValue(left))
-        .slice(0, count);
-}
-
 function distributeBudgetEvenly(positions, budget) {
     if (!positions.length || budget <= 0) {
         return [];
@@ -151,13 +140,13 @@ function buildRebalancePlan(action, portfolio) {
 
     switch (action.strategy) {
         case "equal_weight": {
-            if (!currentPositions.length) {
+            if (!tradablePositions.length) {
                 return finalizePlan([]);
             }
 
-            const targetValue = totalValue / currentPositions.length;
+            const targetValue = totalValue / tradablePositions.length;
             return finalizePlan(
-                currentPositions.map((position) => {
+                tradablePositions.map((position) => {
                     const deltaValue = targetValue - position.value;
                     if (Math.abs(deltaValue) < 0.01) {
                         return null;
@@ -176,7 +165,7 @@ function buildRebalancePlan(action, portfolio) {
 
         case "buy_industry": {
             const matching = tradablePositions.filter((position) => position.industry_sector === action.industry);
-            return finalizePlan(distributeBudgetEvenly(matching, totalValue * 0.1));
+            return finalizePlan(distributeBudgetEvenly(matching, matching.length * 100));
         }
 
         case "sell_company_size": {
@@ -186,7 +175,7 @@ function buildRebalancePlan(action, portfolio) {
 
         case "buy_company_size": {
             const matching = tradablePositions.filter((position) => position.company_size === action.company_size);
-            return finalizePlan(distributeBudgetEvenly(matching, totalValue * 0.1));
+            return finalizePlan(distributeBudgetEvenly(matching, matching.length * 100));
         }
 
         case "sell_volatile": {
@@ -197,63 +186,6 @@ function buildRebalancePlan(action, portfolio) {
         default:
             return finalizePlan([]);
     }
-}
-
-function inferDominantIndustry(portfolio) {
-    const entries = Object.entries(portfolio?.industry_allocations || {});
-    if (entries.length > 0) {
-        return entries.sort((left, right) => right[1] - left[1])[0][0];
-    }
-
-    return portfolio?.positions?.[0]?.industry_sector;
-}
-
-function inferDominantCompanySize(portfolio) {
-    const entries = Object.entries(portfolio?.size_allocations || {});
-    if (entries.length > 0) {
-        return entries.sort((left, right) => right[1] - left[1])[0][0];
-    }
-
-    return portfolio?.positions?.[0]?.company_size;
-}
-
-function inferVolatileSymbol(portfolio) {
-    const positions = [...(portfolio?.positions || [])];
-    if (!positions.length) {
-        return undefined;
-    }
-
-    positions.sort((left, right) => (right.volatility || 0) - (left.volatility || 0));
-    return positions[0]?.symbol || portfolio?.positions?.[0]?.symbol;
-}
-
-function defaultQuickCandidates(portfolio) {
-    const topSymbol = cleanString(portfolio?.positions?.[0]?.symbol);
-    const industry = normalizeEnum(inferDominantIndustry(portfolio), INDUSTRIES);
-    const companySize = normalizeEnum(inferDominantCompanySize(portfolio), COMPANY_SIZES);
-
-    return [
-        {
-            label: "Open Ledger",
-            action: "open_ledger",
-            symbol: topSymbol,
-        },
-        {
-            label: "View 1Y",
-            action: "analyze_timeframe",
-            timeframe: "1Y",
-        },
-        {
-            label: "Highlight Industry",
-            action: "highlight_industry",
-            industry,
-        },
-        {
-            label: "Highlight Size",
-            action: "highlight_size",
-            company_size: companySize,
-        },
-    ].filter((candidate) => isValidQuickAction(candidate));
 }
 
 function normalizeAction(rawAction) {
@@ -357,12 +289,6 @@ function normalizeModelActions(modelStrategicActions, modelQuickActions, portfol
     for (const action of normalizedQuickActions.filter(isValidQuickAction)) {
         if (!quickByType.has(action.action)) {
             quickByType.set(action.action, action);
-        }
-    }
-
-    for (const candidate of defaultQuickCandidates(portfolio)) {
-        if (!quickByType.has(candidate.action)) {
-            quickByType.set(candidate.action, candidate);
         }
     }
 
