@@ -1,3 +1,18 @@
+/*
+ * How it works:
+ * - index.js accepts the screenshot request, sends the image to Gemini, waits
+ *   for Gemini's JSON response, loads the user's live portfolio snapshot using
+ *   portfolio.js, asks rebalance.js to calculate trades for the strategic actions,
+ *   then returns Gemini's insights and actions enriched with those calculated
+ *   rebalance plans.
+ * - rebalance.js validates and normalizes Gemini's proposed actions, removes
+ *   duplicates, and attaches a concrete rebalance plan for each strategic action
+ *   based on current holdings.
+ * - portfolio.js queries Neon for the user's positions, prices, volatility, and
+ *   allocation breakdowns, then builds the portfolio snapshot consumed by the
+ *   rebalance logic.
+ */
+
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { GoogleGenAI, Type } = require("@google/genai");
 
@@ -8,83 +23,6 @@ const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const PROJECT =
     process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
 const LOCATION = process.env.GOOGLE_CLOUD_LOCATION || "us-central1";
-
-// const PROMPT = `
-// You are a financial portfolio assistant.
-//
-// Analyze the dashboard screenshot.
-//
-// ---------------
-//
-// 1) Identify:
-// - total portfolio value
-// - gains or losses including
-//     1) PNL in the line graph's timeframe (1D, 5D, 1M, 6M, 1Y, 5Y). Do NOT assume it is daily gain or loss. It is the timeframe's gain or loss.
-//     2) Daily and total PNL from the portfolio summary.
-// - concentration risks
-// - volatility warnings
-// - diversification suggestions in terms of 1) industry diversification, 2) company size, and 3) volatility management
-//
-// Return concise bullet points.
-// Do not insert more than one blank line between sections.
-//
-// ---------------
-//
-// 2) Return the result as valid JSON with the following schema:
-// {
-//   "insights": "markdown analysis from step 1",
-//   "strategic_actions": [
-//     {
-//       "label": "short UI label for a rebalance action",
-//       "action": "must be rebalance",
-//       "strategy": "required one of: equal_weight | sell_industry | buy_industry | sell_company_size | buy_company_size | sell_volatile",
-//       "industry": "optional one of: energy | healthcare | industrials | communication_services | information_technology | consumer_staples",
-//       "company_size": "optional one of: small_cap | mid_cap | large_cap | mega_cap",
-//       "symbol": "optional stock symbol"
-//     }
-//   ],
-//   "quick_actions": [
-//     {
-//       "label": "short UI label for a quick action",
-//       "action": "one of: open_ledger | analyze_timeframe | highlight_industry | highlight_size",
-//       "industry": "optional one of: energy | healthcare | industrials | communication_services | information_technology | consumer_staples",
-//       "company_size": "optional one of: small_cap | mid_cap | large_cap | mega_cap",
-//       "symbol": "optional stock symbol",
-//       "timeframe": "optional one of: 1D | 5D | 1M | 6M | 1Y | 5Y"
-//     }
-//   ]
-// }
-//
-// ---------------
-//
-// Interpret the following as a strict contract for strategic actions:
-// - Return exactly 6 objects in "strategic_actions".
-// - Every object in "strategic_actions" must use "action": "rebalance" and must include a valid "strategy".
-// - "strategic_actions" must contain exactly one object for each of these six strategies: "equal_weight", "sell_industry", "buy_industry", "sell_company_size", "buy_company_size", "sell_volatile".
-// - Strategic action variants:
-//     - equal_weight => required: [label, action, strategy], allowed: [label, action, strategy]
-//     - sell_industry => required: [label, action, strategy, industry], allowed: [label, action, strategy, industry]
-//     - buy_industry => required: [label, action, strategy, industry], allowed: [label, action, strategy, industry]
-//     - sell_company_size => required: [label, action, strategy, company_size], allowed: [label, action, strategy, company_size]
-//     - buy_company_size => required: [label, action, strategy, company_size], allowed: [label, action, strategy, company_size]
-//     - sell_volatile => required: [label, action, strategy, symbol], allowed: [label, action, strategy, symbol]
-//
-// Interpret the following as a strict contract for quick actions:
-// - Return exactly 4 objects in "quick_actions", with exactly one of each: "open_ledger", "analyze_timeframe", "highlight_industry", "highlight_size".
-// - "strategy" must appear only inside "strategic_actions".
-// - Quick action variants:
-//     - open_ledger => required: [label, action, symbol], allowed: [label, action, symbol]
-//     - analyze_timeframe => required: [label, action, timeframe], allowed: [label, action, timeframe]
-//     - highlight_industry => required: [label, action, industry], allowed: [label, action, industry]
-//     - highlight_size => required: [label, action, company_size], allowed: [label, action, company_size]
-//
-// - Do not copy the currently visible chart timeframe into unrelated actions.
-// - Labels are not a substitute for structured fields. Every required field must appear in the JSON property.
-// - If a rebalance action is missing its required structured field, that action is invalid.
-// - Do not return "analyze_symbol".
-// - Use short labels suitable for clickable UI chips.
-// - Return valid JSON only. No commentary outside the JSON.
-// `;
 
 const PROMPT = `
 You are a financial portfolio assistant.
