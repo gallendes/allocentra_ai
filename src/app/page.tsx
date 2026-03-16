@@ -144,6 +144,18 @@ function formatDateOnly(value?: string) {
   });
 }
 
+function parseDateOnly(value?: string) {
+  if (!value) return null;
+  const datePrefix = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (datePrefix) {
+    const [, year, month, day] = datePrefix;
+    return new Date(Number(year), Number(month) - 1, Number(day));
+  }
+
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 function localDateISO(d = new Date()) {
   // YYYY-MM-DD in the user's *local* timezone (avoids toISOString() UTC shift)
   const yyyy = d.getFullYear();
@@ -694,9 +706,8 @@ export default function Page() {
                         tick={{ fontSize: 12 }}
                         minTickGap={24}
                         tickFormatter={(v) => {
-                          if (!v) return "";
-                          const d = new Date(v);
-                          if (isNaN(d.getTime())) return "";
+                          const d = parseDateOnly(v);
+                          if (!d) return "";
                           return d.toLocaleDateString(undefined, { month: "short", day: "2-digit" });
                         }}
                     />
@@ -712,9 +723,8 @@ export default function Page() {
                     <Tooltip
                         formatter={(value: any) => fmtMoney(Number(value))}
                         labelFormatter={(label: any) => {
-                          if (!label) return "";
-                          const d = new Date(label);
-                          if (isNaN(d.getTime())) return "";
+                          const d = parseDateOnly(label);
+                          if (!d) return "";
                           return d.toLocaleDateString(undefined, {
                             year: "numeric",
                             month: "short",
