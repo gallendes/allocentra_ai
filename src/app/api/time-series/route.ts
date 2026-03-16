@@ -116,75 +116,51 @@ export async function GET(req: Request) {
                 AND t.executed_at::DATE <= ${to}::DATE
               GROUP BY t.symbol, t.executed_at::DATE
             ),
-            opening AS (
-              SELECT
-                symbol,
-                COALESCE(SUM(delta), 0) AS opening_shares
-              FROM trade_daily
-              WHERE dt < ${from}::DATE
-              GROUP BY symbol
-            ),
-            closes_with_delta AS (
+            holdings AS (
               SELECT
                 c.symbol,
                 c.dt,
                 c.close,
-                COALESCE(td.delta, 0) AS delta,
-                COALESCE(o.opening_shares, 0) AS opening_shares
+                COALESCE((
+                  SELECT SUM(td.delta)
+                  FROM trade_daily td
+                  WHERE td.symbol = c.symbol
+                    AND td.dt <= c.dt
+                ), 0) AS shares
               FROM closes c
-              LEFT JOIN trade_daily td
-                ON td.symbol = c.symbol
-               AND td.dt = c.dt
-              LEFT JOIN opening o
-                ON o.symbol = c.symbol
             ),
-            holdings AS (
-              SELECT
-                symbol,
-                dt,
-                close,
-                (
-                  opening_shares
-                  + SUM(delta) OVER (
-                      PARTITION BY symbol
-                      ORDER BY dt
-                      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                    )
-                ) AS shares
-              FROM closes_with_delta
-            ),
-            current_holdings AS (
-                SELECT
-                    h.symbol,
-                    MAX(h.shares) AS shares
-                FROM holdings h
-                GROUP BY h.symbol
+            latest_holdings AS (
+              SELECT DISTINCT ON (h.symbol)
+                h.symbol,
+                h.shares
+              FROM holdings h
+              ORDER BY h.symbol, h.dt DESC
             ),
             today_value AS (
-                SELECT
-                    ${to}::DATE AS dt,
-                    ROUND(SUM(ch.shares * lp.latest_price)::NUMERIC, 2) AS portfolio_value
-                FROM current_holdings ch
-                    JOIN latest_prices lp
-                ON lp.symbol = ch.symbol
-                WHERE ${to}::DATE >= (SELECT MAX(dt) FROM holdings)
+              SELECT
+                ${to}::DATE AS dt,
+                ROUND(SUM(lh.shares * lp.latest_price)::NUMERIC, 2) AS portfolio_value
+              FROM latest_holdings lh
+              JOIN latest_prices lp
+                ON lp.symbol = lh.symbol
+              WHERE ${to}::DATE >= (SELECT MAX(dt) FROM holdings)
             )
             SELECT
-                dt AS datetime,
-                portfolio_value
+              dt AS datetime,
+              portfolio_value
             FROM (
-                 SELECT
-                     dt,
-                     ROUND(SUM(shares * close)::NUMERIC, 2) AS portfolio_value
-                 FROM holdings
-                 WHERE dt < ${to}::DATE
-                 GROUP BY dt
+              SELECT
+                dt,
+                ROUND(SUM(shares * close)::NUMERIC, 2) AS portfolio_value
+              FROM holdings
+              WHERE dt < ${to}::DATE
+              GROUP BY dt
 
-                 UNION ALL
+              UNION ALL
 
-                 SELECT dt, portfolio_value
-                 FROM today_value
-             ) x
+              SELECT dt, portfolio_value
+              FROM today_value
+            ) x
             GROUP BY dt, portfolio_value
             ORDER BY dt DESC;
           `;

@@ -6,6 +6,19 @@ export const runtime = "nodejs";
 
 const sql = neon(process.env.DATABASE_URL!);
 
+function normalizeDateOnly(value: unknown) {
+    if (typeof value === "string") {
+        const match = /^(\d{4}-\d{2}-\d{2})/.exec(value);
+        return match ? match[1] : value;
+    }
+
+    if (value instanceof Date) {
+        return value.toISOString().slice(0, 10);
+    }
+
+    return value;
+}
+
 export async function GET(req: Request) {
     try {
         const { searchParams } = new URL(req.url);
@@ -27,7 +40,12 @@ export async function GET(req: Request) {
             ORDER BY executed_at DESC, id DESC
         `;
 
-        return NextResponse.json(rows);
+        const normalizedRows = rows.map((row) => ({
+            ...row,
+            executed_at: normalizeDateOnly(row.executed_at),
+        }));
+
+        return NextResponse.json(normalizedRows);
 
     } catch (err) {
         console.error("GET /api/trades failed:", err);

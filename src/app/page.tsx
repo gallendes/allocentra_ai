@@ -130,24 +130,24 @@ function fmtNum(n: number, digits = 2) {
 
 function formatDateOnly(value?: string) {
   if (!value) return "";
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!match) {
-    const d = new Date(value);
-    if (isNaN(d.getTime())) return value;
-
-    return d.toLocaleDateString(undefined, {
+  const datePrefix = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (datePrefix) {
+    const [, year, month, day] = datePrefix;
+    return new Intl.DateTimeFormat(undefined, {
       year: "numeric",
       month: "short",
       day: "2-digit",
-    });
+    }).format(new Date(Number(year), Number(month) - 1, Number(day)));
   }
 
-  const [, year, month, day] = match;
-  return new Intl.DateTimeFormat(undefined, {
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return value;
+
+  return d.toLocaleDateString(undefined, {
     year: "numeric",
     month: "short",
     day: "2-digit",
-  }).format(new Date(Number(year), Number(month) - 1, Number(day)));
+  });
 }
 
 function localDateISO(d = new Date()) {
