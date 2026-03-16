@@ -12,6 +12,19 @@ function bad(msg: string, status = 400) {
     return NextResponse.json({ error: msg }, { status });
 }
 
+function normalizeDateOnly(value: unknown) {
+    if (typeof value === "string") {
+        const match = /^(\d{4}-\d{2}-\d{2})/.exec(value);
+        return match ? match[1] : value;
+    }
+
+    if (value instanceof Date) {
+        return value.toISOString().slice(0, 10);
+    }
+
+    return value;
+}
+
 export async function POST(req: Request) {
     let body: any;
     try {
@@ -45,7 +58,13 @@ export async function POST(req: Request) {
             RETURNING id, username, symbol, type, executed_at, shares, price
         `;
 
-        return NextResponse.json(inserted[0], { status: 201 });
+        return NextResponse.json(
+            {
+                ...inserted[0],
+                executed_at: normalizeDateOnly(inserted[0].executed_at),
+            },
+            { status: 201 }
+        );
 
     } catch (err) {
         console.error("POST /api/trade failed:", err);
@@ -77,7 +96,13 @@ export async function DELETE(req: Request) {
             return bad("Trade not found (or not owned by user)", 404);
         }
 
-        return NextResponse.json(deleted[0], { status: 200 });
+        return NextResponse.json(
+            {
+                ...deleted[0],
+                executed_at: normalizeDateOnly(deleted[0].executed_at),
+            },
+            { status: 200 }
+        );
     } catch (e: any) {
         return bad(e?.message ?? "Failed to delete trade", 500);
     }
