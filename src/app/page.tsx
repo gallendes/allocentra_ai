@@ -705,10 +705,10 @@ export default function Page() {
                         dataKey="datetime"
                         tick={{ fontSize: 12 }}
                         minTickGap={24}
+                        interval="preserveStartEnd"
+                        allowDuplicatedCategory={false}
                         tickFormatter={(v) => {
-                          const d = parseDateOnly(v);
-                          if (!d) return "";
-                          return d.toLocaleDateString(undefined, { month: "short", day: "2-digit" });
+                          return formatDateOnly(String(v)).replace(/, \d{4}$/, "");
                         }}
                     />
                     <YAxis
